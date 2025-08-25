@@ -1,4 +1,12 @@
 import * as StellarSdk from '@stellar/stellar-sdk';
+import {
+  isConnected,
+  getAddress,
+  requestAccess,
+  signTransaction,
+  getNetwork,
+  getNetworkDetails,
+} from '@stellar/freighter-api';
 
 // Configure for testnet - change to mainnet when ready
 export const server = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
@@ -20,11 +28,8 @@ export class StellarService {
   // Check if Freighter wallet is connected
   async isWalletConnected(): Promise<boolean> {
     try {
-      if (typeof window !== 'undefined' && window.freighter) {
-        const result = await window.freighter.isConnected();
-        return result;
-      }
-      return false;
+      const result = await isConnected();
+      return result.isConnected;
     } catch (error) {
       console.error('Error checking wallet connection:', error);
       return false;
@@ -34,15 +39,45 @@ export class StellarService {
   // Get user's public key from Freighter
   async getPublicKey(): Promise<string | null> {
     try {
-      if (await this.isWalletConnected()) {
-        if (typeof window !== 'undefined' && window.freighter) {
-          const result = await window.freighter.getPublicKey();
-          return result;
-        }
+      // First check if connected
+      const connected = await isConnected();
+      if (!connected.isConnected) {
+        return null;
       }
+
+      // Try to get address directly first
+      const addressResult = await getAddress();
+      if (addressResult.address && !addressResult.error) {
+        return addressResult.address;
+      }
+
+      // If not allowed, request access
+      const accessResult = await requestAccess();
+      if (accessResult.address && !accessResult.error) {
+        return accessResult.address;
+      }
+
       return null;
     } catch (error) {
       console.error('Error getting public key:', error);
+      return null;
+    }
+  }
+
+  // Get network information
+  async getNetworkInfo() {
+    try {
+      const networkResult = await getNetwork();
+      const detailsResult = await getNetworkDetails();
+      
+      return {
+        network: networkResult.network,
+        networkPassphrase: networkResult.networkPassphrase,
+        networkUrl: detailsResult.networkUrl,
+        sorobanRpcUrl: detailsResult.sorobanRpcUrl,
+      };
+    } catch (error) {
+      console.error('Error getting network info:', error);
       return null;
     }
   }
@@ -62,24 +97,30 @@ export class StellarService {
     sourceAccount: StellarSdk.Account,
     operations: StellarSdk.Operation[]
   ): Promise<StellarSdk.Transaction | StellarSdk.FeeBumpTransaction> {
-    const transaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+    const builder = new StellarSdk.TransactionBuilder(sourceAccount, {
       fee: StellarSdk.BASE_FEE,
       networkPassphrase: networkPassphrase,
-    })
-      .setTimeout(300)
-      .build();
+    }).setTimeout(300);
 
-    operations.forEach(op => transaction.operations.push(op));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    operations.forEach(op => builder.addOperation(op as unknown as any));
 
-    if (typeof window === 'undefined' || !window.freighter) {
-      throw new Error('Freighter wallet not available');
+    const transaction = builder.build();
+
+    try {
+      const signedResult = await signTransaction(transaction.toXDR(), {
+        networkPassphrase: networkPassphrase,
+      });
+
+      if (signedResult.error) {
+        throw new Error(`Transaction signing failed: ${signedResult.error}`);
+      }
+
+      return StellarSdk.TransactionBuilder.fromXDR(signedResult.signedTxXdr, networkPassphrase);
+    } catch (error) {
+      console.error('Error signing transaction:', error);
+      throw new Error('Failed to sign transaction with Freighter');
     }
-    
-    const signedTransaction = await window.freighter.signTransaction(transaction.toXDR(), {
-      networkPassphrase: networkPassphrase,
-    });
-
-    return StellarSdk.TransactionBuilder.fromXDR(signedTransaction, networkPassphrase);
   }
 
   // Submit transaction

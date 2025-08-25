@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { stellarService } from '@/lib/stellar';
-import * as freighter from '@stellar/freighter-api';
+import { requestAccess } from '@stellar/freighter-api';
 
 export interface WalletState {
   isConnected: boolean;
@@ -56,7 +56,11 @@ export function useWallet() {
       setWalletState(prev => ({ ...prev, isLoading: true, error: null }));
       
       // Request access to Freighter
-      await freighter.requestAccess();
+      const accessResult = await requestAccess();
+      
+      if (accessResult.error) {
+        throw new Error(accessResult.error);
+      }
       
       // Check connection after requesting access
       await checkConnection();
@@ -84,8 +88,13 @@ export function useWallet() {
   }, [checkConnection]);
 
   // Check if Freighter is installed
-  const isFreighterInstalled = useCallback(() => {
-    return typeof window !== 'undefined' && !!window.freighter;
+  const isFreighterInstalled = useCallback(async () => {
+    try {
+      const result = await stellarService.isWalletConnected();
+      return result;
+    } catch {
+      return false;
+    }
   }, []);
 
   return {

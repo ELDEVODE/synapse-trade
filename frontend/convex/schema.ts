@@ -31,7 +31,8 @@ export default defineSchema({
     .index("by_user", ["userPublicKey"])
     .index("by_asset", ["asset"])
     .index("by_open", ["isOpen"])
-    .index("by_user_open", ["userPublicKey", "isOpen"]),
+    .index("by_user_open", ["userPublicKey", "isOpen"])
+    .index("by_position", ["positionId"]),
 
   // Market data and prices
   marketData: defineTable({

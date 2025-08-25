@@ -382,7 +382,7 @@ export const getTradingSignals = query({
     if (args.asset) {
       return await ctx.db
         .query("aiTradingSignals")
-        .withIndex("by_asset", (q) => q.eq("asset", args.asset))
+        .withIndex("by_asset", (q) => q.eq("asset", args.asset!))
         .filter((q) => q.gt(q.field("expiresAt"), Date.now()))
         .order("desc")
         .collect();
@@ -415,20 +415,38 @@ export const getChatHistory = query({
 export const getAIInsights = query({
   args: { 
     userPublicKey: v.string(),
-    type: v.optional(v.string()),
+    type: v.optional(v.union(
+      v.literal("risk_assessment"),
+      v.literal("trading_recommendation"),
+      v.literal("market_analysis"),
+      v.literal("portfolio_optimization"),
+      v.literal("sentiment_analysis")
+    )),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const limit = args.limit || 20;
-    let query = ctx.db.query("aiInsights").withIndex("by_user", (q) => 
-      q.eq("userPublicKey", args.userPublicKey)
-    );
     
     if (args.type) {
-      query = query.withIndex("by_type", (q) => q.eq("type", args.type));
+      return await ctx.db
+        .query("aiInsights")
+        .withIndex("by_type", (q) => q.eq("type", args.type!))
+        .filter((q) => 
+          q.and(
+            q.eq(q.field("userPublicKey"), args.userPublicKey),
+            q.or(
+              q.eq(q.field("expiresAt"), undefined),
+              q.gt(q.field("expiresAt"), Date.now())
+            )
+          )
+        )
+        .order("desc")
+        .take(limit);
     }
     
-    return await query
+    return await ctx.db
+      .query("aiInsights")
+      .withIndex("by_user", (q) => q.eq("userPublicKey", args.userPublicKey))
       .filter((q) => 
         q.or(
           q.eq(q.field("expiresAt"), undefined),

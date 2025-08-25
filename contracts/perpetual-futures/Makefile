@@ -7,7 +7,8 @@ test: build
 
 build:
 	stellar contract build
-	@ls -l target/wasm32v1-none/release/*.wasm
+	# The workspace target directory is at the repo root
+	@ls -l ../../target/wasm32v1-none/release/*.wasm || true
 
 fmt:
 	cargo fmt --all

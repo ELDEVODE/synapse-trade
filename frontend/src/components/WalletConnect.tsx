@@ -1,32 +1,32 @@
-'use client';
+"use client";
 
-import { useWallet } from '@/hooks/useWallet';
+import { useWallet } from "@/hooks/useWallet";
 
 export default function WalletConnect() {
-  const { 
-    isConnected, 
-    publicKey, 
-    isLoading, 
-    error, 
-    connect, 
-    disconnect, 
-    isFreighterInstalled 
+  const {
+    isConnected,
+    publicKey,
+    isLoading,
+    error,
+    connect,
+    disconnect,
+    isFreighterInstalled,
   } = useWallet();
 
   if (!isFreighterInstalled) {
     return (
-      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-        <p className="text-yellow-800">
-          Please install{' '}
-          <a 
-            href="https://freighter.app" 
-            target="_blank" 
+      <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+        <p className="text-yellow-400">
+          Please install{" "}
+          <a
+            href="https://freighter.app"
+            target="_blank"
             rel="noopener noreferrer"
-            className="text-blue-600 hover:underline"
+            className="text-purple-400 hover:underline"
           >
             Freighter Wallet
-          </a>
-          {' '}to connect to Stellar
+          </a>{" "}
+          to connect to Stellar
         </p>
       </div>
     );
@@ -34,8 +34,8 @@ export default function WalletConnect() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center space-x-2">
-        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+      <div className="flex items-center justify-center space-x-2 text-white p-4">
+        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-500"></div>
         <span>Checking wallet connection...</span>
       </div>
     );
@@ -43,11 +43,11 @@ export default function WalletConnect() {
 
   if (error) {
     return (
-      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-        <p className="text-red-800 mb-2">Error: {error}</p>
+      <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+        <p className="text-red-400 mb-3 text-sm">Error: {error}</p>
         <button
           onClick={connect}
-          className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+          className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
         >
           Retry Connection
         </button>
@@ -57,17 +57,17 @@ export default function WalletConnect() {
 
   if (isConnected && publicKey) {
     return (
-      <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+      <div className="p-4 bg-purple-500/10 border border-purple-500/30 rounded-lg">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-green-800 font-medium">Wallet Connected</p>
-            <p className="text-sm text-gray-600 mt-1">
+            <p className="text-purple-400 font-medium">Wallet Connected</p>
+            <p className="text-sm text-gray-400 mt-1 font-mono">
               {`${publicKey.slice(0, 6)}...${publicKey.slice(-6)}`}
             </p>
           </div>
           <button
             onClick={disconnect}
-            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors text-sm"
           >
             Disconnect
           </button>
@@ -77,16 +77,16 @@ export default function WalletConnect() {
   }
 
   return (
-    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-      <div className="text-center">
-        <p className="text-blue-800 mb-3">Connect your Stellar wallet to get started</p>
-        <button
-          onClick={connect}
-          className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          Connect Wallet
-        </button>
-      </div>
+    <div className="text-center">
+      <p className="text-gray-400 mb-4">
+        Connect your Stellar wallet to start trading
+      </p>
+      <button
+        onClick={connect}
+        className="w-full px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg hover:from-purple-700 hover:to-purple-800 transition-all font-medium"
+      >
+        Connect Freighter Wallet
+      </button>
     </div>
   );
 }

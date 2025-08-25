@@ -1,6 +1,7 @@
 import { useAction, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { useState, useCallback } from "react";
+import { Position } from "../types/trading";
 
 // Hook for AI-powered trading services
 export const useAIServices = (userPublicKey?: string) => {
@@ -12,17 +13,14 @@ export const useAIServices = (userPublicKey?: string) => {
   const aiChat = useAction(api.ai.aiChat);
   
   // AI Queries
-  const riskAssessment = useQuery(api.ai.getRiskAssessment, 
-    userPublicKey ? { positionId: "latest" } : "skip"
-  );
-  const tradingSignals = useQuery(api.ai.getTradingSignals);
+  const tradingSignals = useQuery(api.ai.getTradingSignals, {});
   const aiInsights = useQuery(api.ai.getAIInsights, 
     userPublicKey ? { userPublicKey } : "skip"
   );
   
   // Market Data
-  const marketData = useQuery(api.marketData.getAllMarketData);
-  const fundingRates = useQuery(api.marketData.getCurrentFundingRates);
+  const marketData = useQuery(api.marketData.getAllMarketData, {});
+  const fundingRates = useQuery(api.marketData.getCurrentFundingRates, {});
   
   // Liquidation Data
   const liquidationHistory = useQuery(api.liquidationBot.getLiquidationHistory, 
@@ -30,7 +28,7 @@ export const useAIServices = (userPublicKey?: string) => {
   );
   
   // AI Chat Functions
-  const sendMessage = useCallback(async (message: string, context?: any) => {
+  const sendMessage = useCallback(async (message: string, context?: unknown) => {
     if (!userPublicKey) {
       throw new Error("User not authenticated");
     }
@@ -101,7 +99,7 @@ export const useAIServices = (userPublicKey?: string) => {
   }, [generateTradingSignal, marketData]);
   
   // Portfolio Analysis
-  const analyzePortfolio = useCallback(async (positions: any[]) => {
+  const analyzePortfolio = useCallback(async (positions: Position[]) => {
     if (!userPublicKey) {
       throw new Error("User not authenticated");
     }
@@ -152,7 +150,7 @@ export const useAIServices = (userPublicKey?: string) => {
   }, [aiChat, userPublicKey, sessionId, marketData, fundingRates]);
   
   // Risk Management Advice
-  const getRiskAdvice = useCallback(async (positionData?: any) => {
+  const getRiskAdvice = useCallback(async (positionData?: Position) => {
     if (!userPublicKey) {
       throw new Error("User not authenticated");
     }
@@ -209,7 +207,7 @@ export const useAIChat = (userPublicKey?: string) => {
     userPublicKey ? { userPublicKey, sessionId } : "skip"
   );
   
-  const sendMessage = useCallback(async (message: string, context?: any) => {
+  const sendMessage = useCallback(async (message: string, context?: unknown) => {
     if (!userPublicKey) {
       throw new Error("User not authenticated");
     }
@@ -240,7 +238,6 @@ export const useAIChat = (userPublicKey?: string) => {
 // Hook for AI Trading Signals
 export const useAITradingSignals = (asset?: string) => {
   const tradingSignals = useQuery(api.ai.getTradingSignals, asset ? { asset } : {});
-  const generateSignal = useAction(api.ai.generateTradingSignal);
   
   const refreshSignal = useCallback(async () => {
     if (!asset) return;
