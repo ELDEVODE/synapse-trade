@@ -142,20 +142,55 @@ export class StellarService {
     args: StellarSdk.xdr.ScVal[] = []
   ) {
     try {
+      console.log('🔧 callContract called with:', {
+        contractAddress,
+        functionName,
+        args: args.map(arg => arg.toString())
+      });
+
       const publicKey = await this.getPublicKey();
       if (!publicKey) {
         throw new Error('Wallet not connected');
       }
 
+      console.log('👤 User public key:', publicKey);
+
       const sourceAccount = await this.getAccount(publicKey);
+      console.log('📊 Source account loaded:', {
+        accountId: sourceAccount.accountId(),
+        sequenceNumber: sourceAccount.sequenceNumber()
+      });
       
       const contract = new StellarSdk.Contract(contractAddress);
       const operation = contract.call(functionName, ...args);
 
+      console.log('📝 Contract operation created:', {
+        functionName,
+        contractId: contract.contractId()
+      });
+
       const transaction = await this.buildAndSignTransaction(sourceAccount, [operation as unknown as StellarSdk.Operation]);
-      return await this.submitTransaction(transaction);
+      console.log('✍️ Transaction built and signed:', {
+        hash: transaction.hash(),
+        fee: transaction.fee,
+        operations: transaction.operations.length
+      });
+
+      const result = await this.submitTransaction(transaction);
+      console.log('🚀 Transaction submitted successfully:', {
+        hash: result.hash,
+        ledger: result.ledger
+      });
+
+      return result;
     } catch (error) {
-      console.error('Contract call failed:', error);
+      console.error('❌ Contract call failed:', error);
+      console.error('❌ Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        contractAddress,
+        functionName
+      });
       throw error;
     }
   }

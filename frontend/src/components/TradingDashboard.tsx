@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useWallet } from "../hooks/useWallet";
 import { contractService } from "../lib/contracts";
 import { TestnetService } from "../lib/testnet";
+import { useOraclePrices } from "../hooks/useOraclePrices";
 
 interface Position {
   id: string;
@@ -20,17 +21,17 @@ interface Position {
   liquidationPrice: string;
 }
 
-interface MarketData {
-  symbol: string;
-  price: string;
-  change24h: number;
-  volume24h: string;
-  high24h: string;
-  low24h: string;
-}
+// MarketData interface moved to useOraclePrices hook
 
 export const TradingDashboard: React.FC = () => {
   const { publicKey, isConnected, disconnect } = useWallet();
+  const {
+    marketData,
+    isLoading: pricesLoading,
+    error: pricesError,
+    refreshPrices,
+    getAssetPrice,
+  } = useOraclePrices();
   const [selectedAsset, setSelectedAsset] = useState("BTC");
   const [orderSide, setOrderSide] = useState<"LONG" | "SHORT">("LONG");
   const [orderSize, setOrderSize] = useState("");
@@ -43,36 +44,26 @@ export const TradingDashboard: React.FC = () => {
   const [isFunding, setIsFunding] = useState(false);
   const [walletDropdownOpen, setWalletDropdownOpen] = useState(false);
 
-  // Mock market data - in real app this would come from oracle/API
-  const marketData: MarketData[] = [
-    {
-      symbol: "BTC",
-      price: "45,250.00",
-      change24h: 2.15,
-      volume24h: "1.2B",
-      high24h: "46,100",
-      low24h: "44,200",
-    },
-    {
-      symbol: "ETH",
-      price: "2,890.50",
-      change24h: -1.25,
-      volume24h: "890M",
-      high24h: "2,950",
-      low24h: "2,840",
-    },
-    {
-      symbol: "SOL",
-      price: "98.75",
-      change24h: 4.8,
-      volume24h: "156M",
-      high24h: "102.50",
-      low24h: "95.20",
-    },
-  ];
+  // Get selected market data from oracle
+  const selectedMarket = getAssetPrice(selectedAsset) || marketData[0];
 
-  const selectedMarket =
-    marketData.find((m) => m.symbol === selectedAsset) || marketData[0];
+  // Calculate total portfolio PnL
+  const portfolioPnL = useMemo(() => {
+    const totalPnL = positions.reduce((sum, position) => {
+      return sum + parseFloat(position.pnl);
+    }, 0);
+
+    const totalValue = positions.reduce((sum, position) => {
+      return sum + parseFloat(position.entryPrice) * parseFloat(position.size);
+    }, 0);
+
+    const pnlPercent = totalValue > 0 ? (totalPnL / totalValue) * 100 : 0;
+
+    return {
+      value: totalPnL.toFixed(2),
+      percent: pnlPercent.toFixed(2),
+    };
+  }, [positions]);
 
   const loadAccountData = useCallback(async () => {
     if (!publicKey) return;
@@ -85,31 +76,103 @@ export const TradingDashboard: React.FC = () => {
     }
   }, [publicKey]);
 
+  const calculatePositionPnL = useCallback(
+    (position: { entryPrice: string; size: string }, currentPrice: number) => {
+      const entryPrice = parseFloat(position.entryPrice);
+      const size = parseFloat(position.size);
+      const isLong = size > 0;
+
+      let pnlValue: number;
+      if (isLong) {
+        // Long position: profit when price goes up
+        pnlValue = (currentPrice - entryPrice) * Math.abs(size);
+      } else {
+        // Short position: profit when price goes down
+        pnlValue = (entryPrice - currentPrice) * Math.abs(size);
+      }
+
+      const pnlPercent = (pnlValue / (entryPrice * Math.abs(size))) * 100;
+
+      return {
+        pnl: pnlValue.toFixed(2),
+        pnlPercent: pnlPercent,
+      };
+    },
+    []
+  );
+
+  const calculateLiquidationPrice = useCallback(
+    (position: {
+      entryPrice: string;
+      size: string;
+      collateral: string;
+      leverage: number;
+    }) => {
+      const entryPrice = parseFloat(position.entryPrice);
+      const collateral = parseFloat(position.collateral);
+      const size = parseFloat(position.size);
+      const isLong = size > 0;
+
+      // Simple liquidation calculation (actual would be more complex)
+      const maintenanceMargin = 0.05; // 5% maintenance margin
+      const liquidationBuffer = collateral * maintenanceMargin;
+
+      let liquidationPrice: number;
+      if (isLong) {
+        // Long liquidation: when losses exceed collateral minus maintenance margin
+        liquidationPrice = entryPrice - liquidationBuffer / Math.abs(size);
+      } else {
+        // Short liquidation: when losses exceed collateral minus maintenance margin
+        liquidationPrice = entryPrice + liquidationBuffer / Math.abs(size);
+      }
+
+      return Math.max(0, liquidationPrice).toFixed(2);
+    },
+    []
+  );
+
   const loadPositions = useCallback(async () => {
     if (!publicKey) return;
     try {
       const contractPositions =
         await contractService.getUserPositions(publicKey);
-      // Convert contract positions to UI format
-      const uiPositions: Position[] = contractPositions.map((p) => ({
-        id: p.id,
-        asset: p.asset,
-        side: parseFloat(p.size) > 0 ? "LONG" : "SHORT",
-        size: Math.abs(parseFloat(p.size)).toString(),
-        entryPrice: p.entryPrice,
-        markPrice: selectedMarket.price.replace(",", ""),
-        pnl: "0.00", // Calculate based on current price vs entry
-        pnlPercent: 0,
-        collateral: p.collateral,
-        leverage: p.leverage,
-        margin: (parseFloat(p.collateral) / p.leverage).toString(),
-        liquidationPrice: "0.00", // Calculate liquidation price
-      }));
+
+      // Convert contract positions to UI format with live PnL calculations
+      const uiPositions: Position[] = contractPositions.map((p) => {
+        const assetPrice = getAssetPrice(p.asset);
+        const currentPrice = assetPrice
+          ? parseFloat(assetPrice.price.replace(",", ""))
+          : 0;
+
+        const pnlData = calculatePositionPnL(p, currentPrice);
+        const liquidationPrice = calculateLiquidationPrice(p);
+
+        return {
+          id: p.id,
+          asset: p.asset,
+          side: parseFloat(p.size) > 0 ? "LONG" : "SHORT",
+          size: Math.abs(parseFloat(p.size)).toString(),
+          entryPrice: p.entryPrice,
+          markPrice: currentPrice.toString(),
+          pnl: pnlData.pnl,
+          pnlPercent: pnlData.pnlPercent,
+          collateral: p.collateral,
+          leverage: p.leverage,
+          margin: (parseFloat(p.collateral) / p.leverage).toString(),
+          liquidationPrice,
+        };
+      });
+
       setPositions(uiPositions);
     } catch (error) {
       console.error("Error loading positions:", error);
     }
-  }, [publicKey, selectedMarket.price]);
+  }, [
+    publicKey,
+    getAssetPrice,
+    calculatePositionPnL,
+    calculateLiquidationPrice,
+  ]);
 
   useEffect(() => {
     if (isConnected && publicKey) {
@@ -117,6 +180,29 @@ export const TradingDashboard: React.FC = () => {
       loadPositions();
     }
   }, [isConnected, publicKey, loadAccountData, loadPositions]);
+
+  // Test connectivity on mount
+  useEffect(() => {
+    const testConnectivity = async () => {
+      console.log("🚀 Testing oracle and contract connectivity...");
+
+      // Test oracle connectivity
+      const oracleTest = await import("../lib/oracle").then((module) =>
+        module.OracleService.testConnection()
+      );
+      console.log(
+        `📊 Oracle connectivity: ${oracleTest ? "✅ Connected" : "❌ Failed"}`
+      );
+
+      // Test contract connectivity
+      const contractTest = await contractService.testConnection();
+      console.log(
+        `📋 Contract connectivity: ${contractTest ? "✅ Connected" : "❌ Failed"}`
+      );
+    };
+
+    testConnectivity();
+  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -136,49 +222,133 @@ export const TradingDashboard: React.FC = () => {
   }, [walletDropdownOpen]);
 
   const handleOpenPosition = async () => {
-    if (!orderSize || !collateral) return;
+    console.log("🎯 handleOpenPosition called with:", {
+      orderSize,
+      collateral,
+      selectedAsset,
+      orderSide,
+      leverage,
+      accountBalance,
+    });
+
+    if (!orderSize || !collateral) {
+      setTxStatus("Please enter position size and collateral");
+      return;
+    }
+
+    const sizeNum = parseFloat(orderSize);
+    const collateralNum = parseFloat(collateral);
+    const currentBalance = parseFloat(accountBalance || "0");
+
+    console.log("📊 Parsed values:", {
+      sizeNum,
+      collateralNum,
+      currentBalance,
+    });
+
+    // Validation for 1000 XLM balance
+    if (collateralNum > currentBalance * 0.9) {
+      // Leave 10% for fees
+      setTxStatus(
+        `Insufficient balance. Max collateral: ${(currentBalance * 0.9).toFixed(2)} XLM`
+      );
+      return;
+    }
+
+    if (collateralNum < 10) {
+      // Minimum 10 XLM
+      setTxStatus("Minimum collateral is 10 XLM");
+      return;
+    }
+
+    if (sizeNum <= 0) {
+      setTxStatus("Position size must be greater than 0");
+      return;
+    }
 
     setIsLoading(true);
     setTxStatus("Opening position...");
 
     try {
-      const sizeInContract = (parseFloat(orderSize) * 1_000_000).toString(); // Convert to contract decimals
-      const collateralInContract = (
-        parseFloat(collateral) * 1_000_000
-      ).toString();
+      console.log(`🚀 Opening ${orderSide} position:`, {
+        asset: selectedAsset,
+        size: sizeNum,
+        collateral: collateralNum,
+        leverage,
+        balance: currentBalance,
+      });
 
-      const txHash = await contractService.openPosition(
+      // Convert to contract format (keeping precision for small amounts)
+      const sizeInContract = (sizeNum * 10_000_000).toString(); // 7 decimals for precision
+      const collateralInContract = (collateralNum * 10_000_000).toString(); // 7 decimals
+
+      console.log("🔧 Contract call parameters:", {
         selectedAsset,
         sizeInContract,
         collateralInContract,
         leverage,
+        isLong: orderSide === "LONG",
+      });
+
+      const txHash = await contractService.openPosition(
+        selectedAsset,
+        sizeInContract,
+        leverage,
+        collateralInContract,
         orderSide === "LONG"
       );
 
-      setTxStatus(`Position opened! Tx: ${txHash.slice(0, 16)}...`);
-      await loadPositions(); // Refresh positions
+      setTxStatus(`✅ Position opened! Tx: ${txHash.slice(0, 16)}...`);
+
+      // Refresh data
+      await Promise.all([loadPositions(), loadAccountData()]);
 
       // Clear form
       setOrderSize("");
       setCollateral("");
+
+      console.log("✅ Position opened successfully:", txHash);
     } catch (error) {
-      setTxStatus(
-        `Failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.error("❌ Error opening position:", error);
+
+      let errorMessage = "Unknown error occurred";
+      if (error instanceof Error) {
+        errorMessage = error.message;
+
+        // Improve error messages for common issues
+        if (errorMessage.includes("insufficient")) {
+          errorMessage = "Insufficient balance for this position";
+        } else if (errorMessage.includes("not connected")) {
+          errorMessage = "Please connect your wallet first";
+        } else if (errorMessage.includes("contract")) {
+          errorMessage = "Smart contract error - try reducing position size";
+        } else if (errorMessage.includes("network")) {
+          errorMessage = "Network error - please try again";
+        } else if (errorMessage.includes("fee")) {
+          errorMessage = "Insufficient XLM for transaction fees";
+        }
+      }
+
+      setTxStatus(`❌ Failed: ${errorMessage}`);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleClosePosition = async (positionId: string) => {
+    console.log("🔒 handleClosePosition called with:", { positionId });
+
     setIsLoading(true);
     setTxStatus(`Closing position ${positionId}...`);
 
     try {
+      console.log("🔧 Calling contractService.closePosition...");
       const txHash = await contractService.closePosition(positionId);
+      console.log("✅ Close position result:", { txHash });
       setTxStatus(`Position closed! Tx: ${txHash.slice(0, 16)}...`);
       await loadPositions(); // Refresh positions
     } catch (error) {
+      console.error("❌ Error closing position:", error);
       setTxStatus(
         `Failed: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -263,14 +433,52 @@ export const TradingDashboard: React.FC = () => {
             <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-purple-600 bg-clip-text text-transparent">
               Synapse Trade
             </h1>
-            <div className="flex items-center space-x-4 text-sm">
-              <span className="text-gray-400">XLM Balance:</span>
-              <span className="text-xl font-mono text-white">
-                {accountBalance ? `${accountBalance} XLM` : "Loading..."}
-              </span>
-              {accountBalance && parseFloat(accountBalance) > 0 && (
-                <span className="text-green-400">Funded</span>
-              )}
+            <div className="flex items-center space-x-6 text-sm">
+              <div className="flex items-center space-x-2">
+                <span className="text-gray-400">Balance:</span>
+                <span className="text-lg font-mono text-white">
+                  {accountBalance ? `${accountBalance} XLM` : "Loading..."}
+                </span>
+                {accountBalance && parseFloat(accountBalance) > 0 && (
+                  <span className="text-green-400">✓</span>
+                )}
+              </div>
+
+              {/* Portfolio PnL */}
+              <div className="flex items-center space-x-2">
+                <span className="text-gray-400">Total PnL:</span>
+                <span
+                  className={`text-lg font-mono ${parseFloat(portfolioPnL.value) >= 0 ? "text-green-400" : "text-red-400"}`}
+                >
+                  ${portfolioPnL.value}
+                </span>
+                <span
+                  className={`text-sm ${parseFloat(portfolioPnL.percent) >= 0 ? "text-green-400" : "text-red-400"}`}
+                >
+                  ({parseFloat(portfolioPnL.percent) >= 0 ? "+" : ""}
+                  {portfolioPnL.percent}%)
+                </span>
+              </div>
+
+              {/* Oracle Status */}
+              <div className="flex items-center space-x-2">
+                <div
+                  className={`w-2 h-2 rounded-full ${pricesError ? "bg-red-400" : pricesLoading ? "bg-yellow-400" : "bg-green-400"}`}
+                ></div>
+                <span className="text-gray-400 text-xs">
+                  {pricesError
+                    ? "Oracle Error"
+                    : pricesLoading
+                      ? "Updating..."
+                      : "Live Prices"}
+                </span>
+                <button
+                  onClick={refreshPrices}
+                  className="text-gray-400 hover:text-white text-xs underline"
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
           </div>
           <div className="flex items-center space-x-4">
@@ -413,7 +621,14 @@ export const TradingDashboard: React.FC = () => {
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="font-semibold">{market.symbol}-PERP</div>
+                      <div className="flex items-center space-x-2">
+                        <span className="font-semibold">
+                          {market.symbol}-PERP
+                        </span>
+                        {market.isStale && (
+                          <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                        )}
+                      </div>
                       <div className="text-sm text-gray-400">Perpetual</div>
                     </div>
                     <div className="text-right">
@@ -438,31 +653,44 @@ export const TradingDashboard: React.FC = () => {
           <div className="bg-gray-900 border-b border-gray-800 p-4">
             <div className="flex items-center space-x-8">
               <div>
-                <div className="text-sm text-gray-400">Mark Price</div>
+                <div className="flex items-center space-x-2">
+                  <div className="text-sm text-gray-400">Mark Price</div>
+                  {selectedMarket?.isStale && (
+                    <div className="text-xs text-yellow-400 bg-yellow-400/10 px-2 py-1 rounded">
+                      STALE
+                    </div>
+                  )}
+                </div>
                 <div className="text-2xl font-mono">
-                  ${selectedMarket.price}
+                  ${selectedMarket?.price || "0.00"}
                 </div>
               </div>
               <div>
                 <div className="text-sm text-gray-400">24h Change</div>
                 <div
-                  className={`text-lg ${selectedMarket.change24h >= 0 ? "text-green-400" : "text-red-400"}`}
+                  className={`text-lg ${(selectedMarket?.change24h || 0) >= 0 ? "text-green-400" : "text-red-400"}`}
                 >
-                  {selectedMarket.change24h >= 0 ? "+" : ""}
-                  {selectedMarket.change24h.toFixed(2)}%
+                  {(selectedMarket?.change24h || 0) >= 0 ? "+" : ""}
+                  {(selectedMarket?.change24h || 0).toFixed(2)}%
                 </div>
               </div>
               <div>
                 <div className="text-sm text-gray-400">24h Volume</div>
-                <div className="text-lg">${selectedMarket.volume24h}</div>
+                <div className="text-lg">
+                  ${selectedMarket?.volume24h || "0"}
+                </div>
               </div>
               <div>
                 <div className="text-sm text-gray-400">24h High</div>
-                <div className="text-lg">${selectedMarket.high24h}</div>
+                <div className="text-lg">
+                  ${selectedMarket?.high24h || "0.00"}
+                </div>
               </div>
               <div>
                 <div className="text-sm text-gray-400">24h Low</div>
-                <div className="text-lg">${selectedMarket.low24h}</div>
+                <div className="text-lg">
+                  ${selectedMarket?.low24h || "0.00"}
+                </div>
               </div>
             </div>
           </div>
@@ -605,15 +833,37 @@ export const TradingDashboard: React.FC = () => {
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm text-gray-400 mb-2">
-                    Size
+                    Size ({selectedAsset})
                   </label>
                   <input
                     type="number"
+                    step={
+                      selectedAsset === "BTC"
+                        ? "0.001"
+                        : selectedAsset === "ETH"
+                          ? "0.01"
+                          : "0.1"
+                    }
                     value={orderSize}
                     onChange={(e) => setOrderSize(e.target.value)}
-                    placeholder="0.0"
+                    placeholder={
+                      selectedAsset === "BTC"
+                        ? "0.01"
+                        : selectedAsset === "ETH"
+                          ? "0.1"
+                          : "1.0"
+                    }
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
+                  <div className="text-xs text-gray-500 mt-1">
+                    Min:{" "}
+                    {selectedAsset === "BTC"
+                      ? "0.001"
+                      : selectedAsset === "ETH"
+                        ? "0.01"
+                        : "0.1"}{" "}
+                    {selectedAsset}
+                  </div>
                 </div>
 
                 <div>
@@ -635,15 +885,58 @@ export const TradingDashboard: React.FC = () => {
 
                 <div>
                   <label className="block text-sm text-gray-400 mb-2">
-                    Collateral (USD)
+                    Collateral (XLM)
                   </label>
                   <input
                     type="number"
+                    step="1"
+                    min="10"
+                    max={
+                      accountBalance
+                        ? Math.floor(parseFloat(accountBalance) * 0.9)
+                        : 900
+                    }
                     value={collateral}
                     onChange={(e) => setCollateral(e.target.value)}
-                    placeholder="0.0"
+                    placeholder="50"
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
+                  <div className="flex justify-between items-center text-xs text-gray-500 mt-1">
+                    <span>
+                      Min: 10 XLM | Available: {accountBalance || "0"} XLM
+                    </span>
+                    <div className="space-x-1">
+                      <button
+                        onClick={() => setCollateral("50")}
+                        className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+                        type="button"
+                      >
+                        50
+                      </button>
+                      <button
+                        onClick={() => setCollateral("100")}
+                        className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+                        type="button"
+                      >
+                        100
+                      </button>
+                      <button
+                        onClick={() =>
+                          setCollateral(
+                            accountBalance
+                              ? Math.floor(
+                                  parseFloat(accountBalance) * 0.5
+                                ).toString()
+                              : "400"
+                          )
+                        }
+                        className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+                        type="button"
+                      >
+                        50%
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 <button
