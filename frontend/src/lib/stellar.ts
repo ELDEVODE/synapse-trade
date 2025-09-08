@@ -2,7 +2,6 @@ import * as StellarSdk from '@stellar/stellar-sdk';
 import {
   isConnected,
   getAddress,
-  requestAccess,
   signTransaction,
   getNetwork,
   getNetworkDetails,
@@ -10,6 +9,7 @@ import {
 
 // Configure for testnet - change to mainnet when ready
 export const server = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
+export const sorobanServer = new StellarSdk.rpc.Server('https://soroban-testnet.stellar.org');
 export const networkPassphrase = StellarSdk.Networks.TESTNET;
 
 // Contract addresses - update these with your deployed contract addresses
@@ -20,9 +20,16 @@ export const CONTRACT_ADDRESSES = {
 
 export class StellarService {
   private server: StellarSdk.Horizon.Server;
+  private _sorobanServer: StellarSdk.rpc.Server;
 
   constructor() {
     this.server = server;
+    this._sorobanServer = sorobanServer;
+  }
+
+  // Getter for soroban server (for contract read operations)
+  get sorobanServer() {
+    return this._sorobanServer;
   }
 
   // Check if Freighter wallet is connected
@@ -45,18 +52,14 @@ export class StellarService {
         return null;
       }
 
-      // Try to get address directly first
+      // Try to get address directly (this should not trigger a popup if already connected)
       const addressResult = await getAddress();
       if (addressResult.address && !addressResult.error) {
         return addressResult.address;
       }
 
-      // If not allowed, request access
-      const accessResult = await requestAccess();
-      if (accessResult.address && !accessResult.error) {
-        return accessResult.address;
-      }
-
+      // If we can't get the address, return null instead of requesting access
+      // This prevents popup on page load - access should be requested explicitly by user action
       return null;
     } catch (error) {
       console.error('Error getting public key:', error);
@@ -126,11 +129,78 @@ export class StellarService {
   // Submit transaction
   async submitTransaction(transaction: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction) {
     try {
+      console.log('🚀 Submitting transaction to Horizon...');
+      console.log('📋 Transaction XDR:', transaction.toXDR());
+      
       const result = await this.server.submitTransaction(transaction);
-      console.log('Transaction successful:', result);
+      console.log('✅ Transaction successful:', result);
       return result;
     } catch (error) {
-      console.error('Transaction failed:', error);
+      console.error('❌ Transaction submission failed:', error);
+      
+      // Enhanced error logging for HTTP responses
+      if (error && typeof error === 'object') {
+        const errorObj = error as Record<string, unknown>;
+        console.error('🔍 Detailed error analysis:', {
+          name: errorObj.name,
+          message: errorObj.message,
+          status: errorObj.status,
+          statusCode: errorObj.statusCode,
+          response: errorObj.response,
+          data: errorObj.data,
+          config: errorObj.config,
+          request: errorObj.request && typeof errorObj.request === 'object' ? {
+            url: (errorObj.request as Record<string, unknown>).url,
+            method: (errorObj.request as Record<string, unknown>).method,
+            headers: (errorObj.request as Record<string, unknown>).headers
+          } : 'No request info'
+        });
+
+        // If it's a Horizon error, log the response data
+        if (errorObj.response && typeof errorObj.response === 'object') {
+          const response = errorObj.response as Record<string, unknown>;
+          console.error('🌐 Horizon response data:', response.data);
+          console.error('🌐 Horizon response status:', response.status);
+          console.error('🌐 Horizon response headers:', response.headers);
+          
+          // Log detailed transaction failure information
+          if (response.data && typeof response.data === 'object') {
+            const data = response.data as Record<string, unknown>;
+            if (data.extras) {
+              console.error('🔍 Transaction failure extras:', data.extras);
+              
+              if (data.extras && typeof data.extras === 'object') {
+                const extras = data.extras as Record<string, unknown>;
+                if (extras.result_codes) {
+                  console.error('📊 Result codes:', extras.result_codes);
+                }
+                
+                if (extras.result_xdr) {
+                  console.error('📋 Result XDR:', extras.result_xdr);
+                }
+                
+                if (extras.envelope_xdr) {
+                  console.error('📦 Envelope XDR:', extras.envelope_xdr);
+                }
+              }
+            }
+          }
+        }
+
+        // If it has extras (Stellar SDK specific)
+        if (errorObj.extras) {
+          console.error('🔧 Stellar SDK extras:', errorObj.extras);
+        }
+
+        // If it has result_codes (transaction specific)
+        if (errorObj.extras && typeof errorObj.extras === 'object') {
+          const extras = errorObj.extras as Record<string, unknown>;
+          if (extras.result_codes) {
+            console.error('📊 Result codes:', extras.result_codes);
+          }
+        }
+      }
+      
       throw error;
     }
   }
@@ -162,27 +232,79 @@ export class StellarService {
       });
       
       const contract = new StellarSdk.Contract(contractAddress);
-      const operation = contract.call(functionName, ...args);
+      
+      // Build the transaction first to get auth
+      let transaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+        fee: StellarSdk.BASE_FEE,
+        networkPassphrase: StellarSdk.Networks.TESTNET
+      })
+        .addOperation(contract.call(functionName, ...args))
+        .setTimeout(300)
+        .build();
 
       console.log('📝 Contract operation created:', {
         functionName,
         contractId: contract.contractId()
       });
 
-      const transaction = await this.buildAndSignTransaction(sourceAccount, [operation as unknown as StellarSdk.Operation]);
-      console.log('✍️ Transaction built and signed:', {
-        hash: transaction.hash(),
-        fee: transaction.fee,
-        operations: transaction.operations.length
+      // Simulate to get auth requirements
+      console.log('🔍 Simulating transaction for auth...');
+      const simulated = await this._sorobanServer.simulateTransaction(transaction);
+      
+      if (StellarSdk.rpc.Api.isSimulationError(simulated)) {
+        console.error('❌ Simulation failed:', simulated);
+        throw new Error('Transaction simulation failed');
+      } else if (StellarSdk.rpc.Api.isSimulationSuccess(simulated)) {
+        // Apply the auth from simulation
+        transaction = StellarSdk.rpc.assembleTransaction(transaction, simulated).build();
+        console.log('✅ Auth applied from simulation');
+      } else {
+        console.error('❌ Unexpected simulation result:', simulated);
+        throw new Error('Unexpected simulation result');
+      }
+      // Sign the transaction
+      console.log('✍️ Signing transaction with Freighter...');
+      const signedResult = await signTransaction(transaction.toXDR(), {
+        networkPassphrase: StellarSdk.Networks.TESTNET,
+        address: publicKey,
+      });
+      
+      if (signedResult.error) {
+        throw new Error(`Transaction signing failed: ${signedResult.error}`);
+      }
+      
+      const finalTransaction = StellarSdk.TransactionBuilder.fromXDR(
+        signedResult.signedTxXdr,
+        StellarSdk.Networks.TESTNET
+      );
+      
+      console.log('✍️ Transaction signed:', {
+        hash: finalTransaction.hash(),
+        fee: finalTransaction.fee,
+        operations: finalTransaction.operations.length
       });
 
-      const result = await this.submitTransaction(transaction);
+      const result = await this.submitTransaction(finalTransaction);
       console.log('🚀 Transaction submitted successfully:', {
         hash: result.hash,
         ledger: result.ledger
       });
 
-      return result;
+      // Extract return value from simulation if available
+      let returnValue = null;
+      if (StellarSdk.rpc.Api.isSimulationSuccess(simulated) && simulated.result?.retval) {
+        try {
+          returnValue = StellarSdk.scValToNative(simulated.result.retval);
+          console.log('📊 Contract return value:', returnValue);
+        } catch (parseError) {
+          console.warn('⚠️ Could not parse contract return value:', parseError);
+        }
+      }
+
+      return {
+        ...result,
+        returnValue
+      };
     } catch (error) {
       console.error('❌ Contract call failed:', error);
       console.error('❌ Error details:', {

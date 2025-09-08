@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAIServices } from "../hooks/useAIServices";
-import { useWallet } from "../hooks/useWallet";
+import { useWallet } from "@/providers/WalletProvider";
 import {
   MarketData,
   TradingSignal,

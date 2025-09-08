@@ -3,8 +3,26 @@
 import { useCallback, useEffect } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
-import { useWallet } from './useWallet';
+import { useWallet } from '@/providers/WalletProvider';
 // import type { Id } from '../../convex/_generated/dataModel';
+
+interface BlockchainPosition {
+  id: string;
+  user: string;
+  asset: string;
+  size: number;
+  entryPrice: number;
+  leverage: number;
+  collateral: number;
+  isOpen: boolean;
+  timestamp: number;
+}
+
+interface PositionSyncData {
+  positionId: string;
+  blockchainData: BlockchainPosition;
+  txHash: string;
+}
 
 // Hook for user management with Convex
 export function useConvexUser() {
@@ -311,5 +329,114 @@ export function useStellarWithConvex() {
     ...wallet,
     executeAndLogTransaction,
     initializeUser,
+  };
+}
+
+// Hook for position management with Convex
+export function useConvexPositions() {
+  const { publicKey } = useWallet();
+  const upsertPosition = useMutation(api.positions.upsertPosition);
+  const closePosition = useMutation(api.positions.closePosition);
+  const syncPositionFromBlockchain = useMutation(api.positions.syncPositionFromBlockchain);
+  const bulkSyncPositions = useMutation(api.positions.bulkSyncPositions);
+  
+  const userPositions = useQuery(
+    api.positions.getUserPositions,
+    publicKey ? { 
+      userPublicKey: publicKey, 
+      includeOpen: true, 
+      includeClosed: false,
+      limit: 50 
+    } : 'skip'
+  );
+  
+  const portfolioSummary = useQuery(
+    api.positions.getPortfolioSummary,
+    publicKey ? { userPublicKey: publicKey } : 'skip'
+  );
+
+  const recordPosition = useCallback(async (positionData: {
+    positionId: string;
+    asset: string;
+    size: string;
+    collateral: string;
+    entryPrice: string;
+    leverage: number;
+    timestamp?: number;
+    txHash?: string;
+    isOpen?: boolean;
+    pnl?: string;
+  }) => {
+    if (!publicKey) return null;
+
+    try {
+      return await upsertPosition({
+        ...positionData,
+        userPublicKey: publicKey,
+        timestamp: positionData.timestamp || Date.now(),
+        isOpen: positionData.isOpen ?? true,
+        pnl: positionData.pnl || "0",
+      });
+    } catch (error) {
+      console.error('Error recording position:', error);
+      return null;
+    }
+  }, [publicKey, upsertPosition]);
+
+  const closeUserPosition = useCallback(async (positionData: {
+    positionId: string;
+    closePrice: string;
+    pnl: string;
+    txHash: string;
+    timestamp?: number;
+  }) => {
+    try {
+      return await closePosition({
+        ...positionData,
+        timestamp: positionData.timestamp || Date.now(),
+      });
+    } catch (error) {
+      console.error('Error closing position:', error);
+      return null;
+    }
+  }, [closePosition]);
+
+  const syncFromBlockchain = useCallback(async (blockchainPositions: BlockchainPosition[]) => {
+    if (!publicKey) return null;
+
+    try {
+      return await bulkSyncPositions({
+        userPublicKey: publicKey,
+        positions: blockchainPositions,
+        syncTimestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error('Error syncing positions from blockchain:', error);
+      return null;
+    }
+  }, [publicKey, bulkSyncPositions]);
+
+  const syncSinglePosition = useCallback(async (positionData: PositionSyncData) => {
+    if (!publicKey) return null;
+
+    try {
+      return await syncPositionFromBlockchain({
+        ...positionData,
+        userPublicKey: publicKey,
+      });
+    } catch (error) {
+      console.error('Error syncing single position:', error);
+      return null;
+    }
+  }, [publicKey, syncPositionFromBlockchain]);
+
+  return {
+    positions: userPositions || [],
+    portfolioSummary,
+    recordPosition,
+    closeUserPosition,
+    syncFromBlockchain,
+    syncSinglePosition,
+    isLoading: userPositions === undefined && publicKey !== null,
   };
 }

@@ -21,10 +21,14 @@ export function useWallet() {
 
   const checkConnection = useCallback(async () => {
     try {
-      setWalletState(prev => ({ ...prev, isLoading: true, error: null }));
-      
+      // Prevent rapid successive calls
+      setWalletState(prev => {
+        if (prev.isLoading) return prev; // Already checking
+        return { ...prev, isLoading: true, error: null };
+      });
+
       const isConnected = await stellarService.isWalletConnected();
-      
+
       if (isConnected) {
         const publicKey = await stellarService.getPublicKey();
         setWalletState({
@@ -54,14 +58,17 @@ export function useWallet() {
   const connect = useCallback(async () => {
     try {
       setWalletState(prev => ({ ...prev, isLoading: true, error: null }));
-      
+
       // Request access to Freighter
       const accessResult = await requestAccess();
-      
+
       if (accessResult.error) {
         throw new Error(accessResult.error);
       }
-      
+
+      // Small delay to prevent rapid successive calls
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       // Check connection after requesting access
       await checkConnection();
     } catch (error) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useWallet } from "@/hooks/useWallet";
+import { useWallet } from "@/providers/WalletProvider";
 
 export default function WalletConnect() {
   const {

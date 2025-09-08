@@ -109,6 +109,7 @@ export default defineSchema({
       v.literal("portfolio_optimization"),
       v.literal("sentiment_analysis")
     ),
+    title: v.string(), // Title for the insight
     asset: v.optional(v.string()),
     content: v.string(), // AI-generated analysis
     confidence: v.optional(v.number()), // AI confidence score 0-1
@@ -139,6 +140,37 @@ export default defineSchema({
     .index("by_position", ["positionId"])
     .index("by_user", ["userPublicKey"])
     .index("by_risk_level", ["riskLevel"]),
+
+  // Portfolio Snapshots for historical analysis
+  portfolioSnapshots: defineTable({
+    userPublicKey: v.string(),
+    analytics: v.any(), // Portfolio analytics snapshot
+    marketConditions: v.optional(v.any()), // Market data at snapshot time
+    timestamp: v.number(),
+  })
+    .index("by_user", ["userPublicKey"])
+    .index("by_user_time", ["userPublicKey", "timestamp"])
+    .index("by_timestamp", ["timestamp"]),
+
+  // AI Chat Sessions
+  aiChatSessions: defineTable({
+    sessionId: v.string(),
+    userPublicKey: v.string(),
+    messages: v.array(v.object({
+      id: v.string(),
+      role: v.union(v.literal("user"), v.literal("assistant")),
+      content: v.string(),
+      timestamp: v.number(),
+      type: v.optional(v.union(v.literal("text"), v.literal("analysis"), v.literal("recommendation"))),
+    })),
+    createdAt: v.number(),
+    lastActivity: v.number(),
+    isActive: v.boolean(),
+  })
+    .index("by_user", ["userPublicKey"])
+    .index("by_session", ["sessionId"])
+    .index("by_activity", ["lastActivity"]),
+
 
   // AI Trading Signals
   aiTradingSignals: defineTable({
@@ -310,4 +342,59 @@ export default defineSchema({
     .index("by_user", ["userPublicKey"])
     .index("by_contract", ["contractAddress"])
     .index("by_timestamp", ["timestamp"]),
+
+  // Performance snapshots for analytics
+  performanceSnapshots: defineTable({
+    userPublicKey: v.string(),
+    metrics: v.any(), // Performance metrics object
+    timestamp: v.number(),
+  })
+    .index("by_user", ["userPublicKey"])
+    .index("by_timestamp", ["timestamp"]),
+
+  // Market sentiment data
+  marketSentiment: defineTable({
+    asset: v.string(),
+    sentiment: v.union(
+      v.literal("bullish"),
+      v.literal("bearish"),
+      v.literal("neutral")
+    ),
+    score: v.number(), // -100 to +100
+    confidence: v.number(), // 0-1
+    sources: v.any(), // News, social, on-chain data
+    timestamp: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_asset", ["asset"])
+    .index("by_sentiment", ["sentiment"])
+    .index("by_timestamp", ["timestamp"]),
+
+  // Price alerts
+  priceAlerts: defineTable({
+    userPublicKey: v.string(),
+    asset: v.string(),
+    targetPrice: v.string(),
+    direction: v.union(v.literal("above"), v.literal("below")),
+    isActive: v.boolean(),
+    triggeredAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_user", ["userPublicKey"])
+    .index("by_asset", ["asset"])
+    .index("by_active", ["isActive"]),
+
+  // Trading strategies and templates
+  tradingStrategies: defineTable({
+    userPublicKey: v.string(),
+    name: v.string(),
+    description: v.optional(v.string()),
+    strategy: v.any(), // Strategy configuration
+    isActive: v.boolean(),
+    performance: v.optional(v.any()), // Strategy performance metrics
+    createdAt: v.number(),
+    lastUsed: v.optional(v.number()),
+  })
+    .index("by_user", ["userPublicKey"])
+    .index("by_active", ["isActive"]),
 });

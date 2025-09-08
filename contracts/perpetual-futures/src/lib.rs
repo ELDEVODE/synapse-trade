@@ -118,11 +118,13 @@ impl PerpetualFutures {
     // Open a new position
     pub fn open_position(
         env: Env,
+        user: Address,
         asset_symbol: Symbol, // Asset symbol like "BTC", "ETH", "SOL"
         size: i128,
         leverage: u32,
         collateral: i128,
     ) -> Result<u64, Error> {
+        user.require_auth();
         // Validate inputs
         if collateral < Self::get_min_collateral(env.clone()) {
             return Err(Error::InsufficientCollateral);
@@ -153,11 +155,25 @@ impl PerpetualFutures {
 
         let entry_price = price_data.price;
 
-        // Calculate position value and required margin
-        let position_value = size.abs() * entry_price / 10_000_000_000_000_000i128; // 14 decimals = 10^14
+        // Calculate position value and required margin in USD
+        // Size is in 14 decimals (10^14), entry_price is in 14 decimals
+        // So position_value = size * entry_price / 10^28 gives USD value
+        let position_value = size.abs() * entry_price / 10_000_000_000_000_000_000_000_000_000i128; // 14 + 14 decimals = 10^28
         let required_margin = position_value / leverage as i128;
 
-        if collateral < required_margin {
+        // Get XLM price in USD to convert collateral from XLM to USD
+        let xlm_asset = ReflectorAsset::Other(Symbol::new(&env, "XLM"));
+        let xlm_price_data = reflector_client
+            .lastprice(&xlm_asset)
+            .ok_or(Error::OracleError)?;
+
+        // Convert XLM collateral to USD value for comparison
+        // collateral is in 7 decimals, xlm_price is in 14 decimals
+        // USD value = (collateral / 10^7) * (xlm_price / 10^14)
+        // = collateral * xlm_price / (10^7 * 10^14) = collateral * xlm_price / 10^21
+        let collateral_usd_value = (collateral * xlm_price_data.price) / 1_000_000_000_000_000_000_000i128;
+
+        if collateral_usd_value < required_margin {
             return Err(Error::InsufficientCollateral);
         }
 
@@ -166,7 +182,7 @@ impl PerpetualFutures {
 
         let position = Position {
             id: position_id,
-            user: env.current_contract_address(),
+            user: user.clone(),
             asset,
             size,
             leverage,
@@ -183,10 +199,10 @@ impl PerpetualFutures {
 
         // Update user positions
         let mut user_positions =
-            Self::get_user_positions(env.clone(), env.current_contract_address());
+            Self::get_user_positions(env.clone(), user.clone());
         user_positions.push_back(position_id);
         env.storage().instance().set(
-            &(symbol_short!("user_pos"), env.current_contract_address()),
+            &(symbol_short!("user_pos"), user.clone()),
             &user_positions,
         );
 
@@ -200,7 +216,8 @@ impl PerpetualFutures {
     }
 
     // Close a position
-    pub fn close_position(env: Env, position_id: u64) -> Result<(), Error> {
+    pub fn close_position(env: Env, user: Address, position_id: u64) -> Result<(), Error> {
+        user.require_auth();
         let position: Position = env
             .storage()
             .instance()
@@ -209,6 +226,11 @@ impl PerpetualFutures {
 
         if !position.is_open {
             return Err(Error::PositionNotFound);
+        }
+
+        // Ensure only the position owner can close it
+        if position.user != user {
+            return Err(Error::Unauthorized);
         }
 
         // Get current price from oracle
